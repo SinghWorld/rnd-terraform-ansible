@@ -69,4 +69,3 @@ else            { Write-Log "WARNING: Port 5985 not found in netstat" }
 
 Write-Log "=== WinRM Bootstrap Complete ==="
 </powershell>
-<persist>true</persist>

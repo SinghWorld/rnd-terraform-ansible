@@ -1,5 +1,6 @@
 ###############################################################
-# variables.tf
+# spot-variables.tf
+# Variables for Windows EC2 Spot Instance
 ###############################################################
 
 variable "aws_region" {
@@ -8,22 +9,34 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-variable "project_name" {
-  description = "Prefix for all resource names"
+variable "spot_project_name" {
+  description = "Prefix for all spot instance resource names"
   type        = string
-  default     = "win-demo"
+  default     = "win-spot-demo"
 }
 
-variable "key_name" {
+variable "spot_key_name" {
   description = "Name for the EC2 Key Pair (created by Terraform)"
   type        = string
-  default     = "win-demo-key"
+  default     = "win-spot-key"
 }
 
-variable "instance_type" {
+variable "spot_instance_type" {
   description = "EC2 instance type — t3.medium minimum for Windows"
   type        = string
   default     = "t3.medium"
+}
+
+variable "spot_price" {
+  description = "Maximum hourly price ($) you're willing to pay for the spot instance"
+  type        = string
+  default     = "0.05" # ~$0.05/hr vs ~$0.05/hr on-demand t3.medium; adjust based on current spot prices
+}
+
+variable "spot_interruption_behavior" {
+  description = "Behavior when spot instance is interrupted: stop | hibernate | terminate"
+  type        = string
+  default     = "stop" # 'stop' preserves the instance for restart; 'terminate' removes it
 }
 
 variable "winrm_username" {

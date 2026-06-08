@@ -1,6 +1,7 @@
 ###############################################################
-# main.tf
-# Windows EC2 — us-east-1, default VPC
+# spot-instance.tf
+# Windows EC2 SPOT INSTANCE — us-east-1, default VPC
+# 70-90% cost savings vs on-demand, can be interrupted
 # WinRM fully working for Ansible / local testing
 ###############################################################
 
@@ -36,7 +37,7 @@ resource "tls_private_key" "ec2_key" {
 }
 
 resource "aws_key_pair" "ec2_key" {
-  key_name   = var.key_name
+  key_name   = var.spot_key_name
   public_key = tls_private_key.ec2_key.public_key_openssh
 
   tags = local.common_tags
@@ -45,7 +46,7 @@ resource "aws_key_pair" "ec2_key" {
 # Save the private key to disk so you can RDP / decrypt password
 resource "local_sensitive_file" "private_key" {
   content         = tls_private_key.ec2_key.private_key_pem
-  filename        = "${path.module}/../scripts/${var.key_name}.pem"
+  filename        = "${path.module}/../scripts/${var.spot_key_name}.pem"
   file_permission = "0600"
 }
 
@@ -91,9 +92,9 @@ data "aws_ami" "windows" {
 # 3. SECURITY GROUP — WinRM (5985/5986) + RDP (3389)
 ###############################################################
 
-resource "aws_security_group" "windows" {
-  name        = "${var.project_name}-sg"
-  description = "Windows EC2 - WinRM and RDP access"
+resource "aws_security_group" "windows_spot" {
+  name        = "${var.spot_project_name}-sg"
+  description = "Windows Spot EC2 - WinRM and RDP access"
   vpc_id      = data.aws_vpc.default.id
 
   # WinRM HTTP — Ansible connects here
@@ -131,23 +132,31 @@ resource "aws_security_group" "windows" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = merge(local.common_tags, { Name = "${var.project_name}-sg" })
+  tags = merge(local.common_tags, { Name = "${var.spot_project_name}-sg" })
 }
 
 ###############################################################
-# 4. EC2 INSTANCE
+# 4. SPOT INSTANCE REQUEST
+#    - spot_price: max hourly rate you're willing to pay
+#    - instance_interruption_behavior: what happens on interruption
+#    - block_duration_minutes: guaranteed 1-60 mins without interruption
 ###############################################################
 
-resource "aws_instance" "windows" {
+resource "aws_spot_instance_request" "windows_spot" {
   ami                         = data.aws_ami.windows.id
-  instance_type               = var.instance_type
+  instance_type               = var.spot_instance_type
   key_name                    = aws_key_pair.ec2_key.key_name
   subnet_id                   = data.aws_subnets.default.ids[0]
-  vpc_security_group_ids      = [aws_security_group.windows.id]
+  vpc_security_group_ids      = [aws_security_group.windows_spot.id]
   associate_public_ip_address = true
 
-  # CRITICAL: This userdata script is what makes WinRM work
-  user_data = file("${path.module}/userdata.ps1")
+  # SPOT INSTANCE SETTINGS
+  spot_price                     = var.spot_price                 # Max $/hour you're willing to pay
+  wait_for_fulfillment           = true                           # Wait until spot request is fulfilled
+  instance_interruption_behavior = var.spot_interruption_behavior # stop | hibernate | terminate
+
+  # CRITICAL: This userdata script is what makes WinRM work and handles spot interruptions
+  user_data = file("${path.module}/spot-userdata.ps1")
 
   root_block_device {
     volume_type           = "gp3"
@@ -156,11 +165,11 @@ resource "aws_instance" "windows" {
     encrypted             = true
   }
 
-  tags = merge(local.common_tags, { Name = "${var.project_name}-windows" })
+  tags = merge(local.common_tags, { Name = "${var.spot_project_name}-windows-spot" })
 
   # Give Windows enough time to fully boot + run userdata
   timeouts {
-    create = "15m"
+    create = "20m" # Longer timeout for spot - takes more time to fulfill
   }
 }
 
@@ -170,9 +179,10 @@ resource "aws_instance" "windows" {
 
 locals {
   common_tags = {
-    Project     = var.project_name
-    Environment = "dev"
-    ManagedBy   = "Terraform"
-    OS          = "Windows-2022"
+    Project      = var.spot_project_name
+    Environment  = "dev"
+    ManagedBy    = "Terraform"
+    OS           = "Windows-2022"
+    InstanceType = "Spot"
   }
 }
