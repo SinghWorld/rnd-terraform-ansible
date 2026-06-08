@@ -1,14 +1,14 @@
 #!/bin/bash
-# scripts/deploy.sh
+# scripts/destroy.sh
 # ------------------
 # 1. Takes your password from env var TF_VAR_winrm_password
 # 2. Injects it into userdata.ps1 (replaces the placeholder)
-# 3. Runs terraform init + apply
+# 3. Runs terraform destroy
 #
 # Usage:
 #   export TF_VAR_winrm_password="MyStr0ngP@ss2024!"
-#   chmod +x scripts/deploy.sh
-#   ./scripts/deploy.sh
+#   chmod +x scripts/destroy.sh
+#   ./scripts/destroy.sh
 
 set -euo pipefail
 
@@ -23,7 +23,7 @@ if [ -z "${TF_VAR_winrm_password:-}" ]; then
   echo "ERROR: TF_VAR_winrm_password is not set."
   echo ""
   echo "Run:  export TF_VAR_winrm_password=\"MyStr0ngP@ss2024!\""
-  echo "Then: ./scripts/deploy.sh"
+  echo "Then: ./scripts/destroy.sh"
   echo ""
   exit 1
 fi
@@ -43,7 +43,6 @@ sed "s|REPLACE_WITH_YOUR_PASSWORD|${TF_VAR_winrm_password}|g" \
     "$USERDATA" > "$USERDATA_RENDERED"
 
 # Point main.tf to the rendered file
-# (main.tf already references userdata.ps1 — we swap it temporarily)
 cp "$USERDATA" "${USERDATA}.bak"
 cp "$USERDATA_RENDERED" "$USERDATA"
 
@@ -61,8 +60,8 @@ echo "==> terraform validate..."
 terraform validate
 
 echo ""
-echo "==> terraform apply..."
-terraform apply -auto-approve
+echo "==> terraform destroy..."
+terraform destroy -auto-approve
 
 # ---- Restore original userdata (never commit password in file) ----
 cp "${USERDATA}.bak" "$USERDATA"
@@ -70,15 +69,7 @@ rm -f "${USERDATA}.bak" "$USERDATA_RENDERED"
 
 echo ""
 echo "=============================================="
-echo "Deploy complete!"
+echo "Destroy complete!"
 echo ""
-echo "NEXT STEPS:"
-echo "  1. Wait 5-8 minutes for Windows to boot + run userdata"
-echo "  2. Check setup log:"
-echo "     terraform output public_ip"
-echo "  3. Test WinRM port:"
-echo "     curl -s http://\$(terraform output -raw public_ip):5985/wsman"
-echo "  4. Run Ansible test:"
-echo "     cd ../ansible"
-echo "     ansible-playbook -i inventory.ini playbooks/windows_setup.yml"
+echo "All AWS resources have been terminated."
 echo "=============================================="
