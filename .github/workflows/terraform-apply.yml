@@ -14,7 +14,7 @@ on:
       skip_ansible:
         description: 'Skip Ansible run after apply'
         required: false
-        default: 'false'
+        default: false
         type: boolean
 
 env:
