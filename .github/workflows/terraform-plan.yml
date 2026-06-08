@@ -1,0 +1,72 @@
+name: Terraform Plan
+
+on:
+  pull_request:
+    paths:
+      - 'terraform/**'
+      - 'scripts/**'
+      - '.github/workflows/terraform-*.yml'
+  push:
+    branches:
+      - main
+      - working-4-cicd
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.0
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init -upgrade
+
+      - name: Terraform Validate
+        working-directory: terraform
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: terraform
+        env:
+          TF_VAR_winrm_password: ${{ secrets.TF_VAR_winrm_password }}
+        run: |
+          # Inject password into userdata for plan
+          sed "s|REPLACE_WITH_YOUR_PASSWORD|${TF_VAR_winrm_PASSWORD}|g" \
+            spot-userdata.ps1 > spot-userdata.ps1.tmp
+          mv spot-userdata.ps1.tmp spot-userdata.ps1
+
+          terraform plan -no-color -out=tfplan
+          EXIT_CODE=$?
+
+          # Restore original userdata
+          git checkout spot-userdata.ps1
+
+          exit $EXIT_CODE
+
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tfplan
+          path: terraform/tfplan
+          retention-days: 5

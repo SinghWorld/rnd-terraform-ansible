@@ -1,0 +1,128 @@
+name: Terraform Apply
+
+on:
+  push:
+    branches:
+      - main
+      - working-4-cicd
+    paths:
+      - 'terraform/**'
+      - 'scripts/**'
+      - '.github/workflows/terraform-*.yml'
+  workflow_dispatch:
+    inputs:
+      skip_ansible:
+        description: 'Skip Ansible run after apply'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  terraform-apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.0
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init -upgrade
+
+      - name: Terraform Validate
+        working-directory: terraform
+        run: terraform validate
+
+      - name: Inject password into userdata
+        env:
+          TF_VAR_winrm_password: ${{ secrets.TF_VAR_winrm_password }}
+        run: |
+          sed "s|REPLACE_WITH_YOUR_PASSWORD|${TF_VAR_winrm_password}|g" \
+            terraform/spot-userdata.ps1 > terraform/spot-userdata.ps1.tmp
+          mv terraform/spot-userdata.ps1.tmp terraform/spot-userdata.ps1
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: terraform apply -auto-approve -no-color
+
+      - name: Restore original userdata
+        run: git checkout terraform/spot-userdata.ps1
+
+      - name: Get outputs
+        id: outputs
+        working-directory: terraform
+        run: |
+          echo "public_ip=$(terraform output -raw public_ip)" >> $GITHUB_OUTPUT
+          echo "private_key_path=$(terraform output -raw private_key_path)" >> $GITHUB_OUTPUT
+
+      - name: Download private key
+        env:
+          PRIVATE_KEY_PATH: ${{ steps.outputs.outputs.private_key_path }}
+        run: |
+          # Extract just the filename from the path (e.g., scripts/win-spot-key.pem)
+          KEY_FILE=$(basename "$PRIVATE_KEY_PATH")
+          aws s3 cp s3://${{ secrets.TF_VAR_tf_state_bucket }}/$KEY_FILE . || true
+          if [ -f "$KEY_FILE" ]; then chmod 600 "$KEY_FILE"; fi
+          echo "key_file=$KEY_FILE" >> $GITHUB_OUTPUT
+
+      - name: Upload private key
+        uses: actions/upload-artifact@v4
+        with:
+          name: ec2-private-key
+          path: ${{ steps.outputs.outputs.key_file }}
+          retention-days: 1
+
+      - name: Generate artifact with public IP
+        run: |
+          echo "${{ steps.outputs.outputs.public_ip }}" > public_ip.txt
+
+      - name: Upload public IP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-outputs
+          path: public_ip.txt
+          retention-days: 1
+
+      - name: Trigger Ansible Playbook
+        if: ${{ github.event.inputs.skip_ansible != 'true' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.createDispatchEvent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              event_type: 'ansible-run',
+              client_payload: {
+                public_ip: '${{ steps.outputs.outputs.public_ip }}'
+              }
+            })
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ Terraform apply completed. Public IP: `${{ steps.outputs.outputs.public_ip }}`'
+            })
