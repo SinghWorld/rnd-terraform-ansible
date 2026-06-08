@@ -85,22 +85,26 @@ jobs:
           echo "key_file=$KEY_FILE" >> $GITHUB_OUTPUT
 
       - name: Upload private key
+        if: ${{ steps.outputs.outputs.key_file != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: ec2-private-key
           path: ${{ steps.outputs.outputs.key_file }}
           retention-days: 1
+          if-no-files-found: warn
 
       - name: Generate artifact with public IP
         run: |
           echo "${{ steps.outputs.outputs.public_ip }}" > public_ip.txt
 
       - name: Upload public IP artifact
+        if: ${{ steps.outputs.outputs.public_ip != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: terraform-outputs
           path: public_ip.txt
           retention-days: 1
+          if-no-files-found: warn
 
       - name: Trigger Ansible Playbook
         if: ${{ github.event.inputs.skip_ansible != 'true' }}
