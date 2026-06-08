@@ -60,6 +60,7 @@ jobs:
         working-directory: terraform
         env:
           TF_INPUT: 0
+          TF_VAR_winrm_password: ${{ secrets.TF_VAR_winrm_password }}
         run: terraform destroy -auto-approve -no-color
 
       - name: Restore original userdata

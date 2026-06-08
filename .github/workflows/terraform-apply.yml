@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - working-4-cicd
     paths:
       - 'terraform/**'
       - 'scripts/**'
@@ -61,6 +60,8 @@ jobs:
 
       - name: Terraform Apply
         working-directory: terraform
+        env:
+          TF_VAR_winrm_password: ${{ secrets.TF_VAR_winrm_password }}
         run: terraform apply -auto-approve -no-color
 
       - name: Restore original userdata
