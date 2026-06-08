@@ -9,7 +9,6 @@ on:
   push:
     branches:
       - main
-      - working-4-cicd
 
 env:
   AWS_REGION: us-east-1
@@ -51,15 +50,15 @@ jobs:
           TF_VAR_winrm_password: ${{ secrets.TF_VAR_winrm_password }}
         run: |
           # Inject password into userdata for plan
-          sed "s|REPLACE_WITH_YOUR_PASSWORD|${TF_VAR_winrm_PASSWORD}|g" \
-            spot-userdata.ps1 > spot-userdata.ps1.tmp
-          mv spot-userdata.ps1.tmp spot-userdata.ps1
+          sed "s|REPLACE_WITH_YOUR_PASSWORD|${TF_VAR_winrm_password}|g" \
+            terraform/spot-userdata.ps1 > terraform/spot-userdata.ps1.tmp
+          mv terraform/spot-userdata.ps1.tmp terraform/spot-userdata.ps1
 
           terraform plan -no-color -out=tfplan
           EXIT_CODE=$?
 
           # Restore original userdata
-          git checkout spot-userdata.ps1
+          git checkout terraform/spot-userdata.ps1
 
           exit $EXIT_CODE
 
