@@ -1,16 +1,97 @@
-# Cache objects
-packer_cache/
+# Terraform state
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/tfplan
+terraform/crash.log
 
-# Crash log
-crash.log
+# Secrets — never commit these
+terraform/terraform.tfvars
+terraform/userdata_rendered.ps1
+terraform/userdata.ps1.bak
+scripts/*.pem
+*.pem
+*.key
+.env
 
-# https://www.packer.io/guides/hcl/variables
-# Exclude all .pkrvars.hcl files, which are likely to contain sensitive data,
-# such as password, private keys, and other secrets. These should not be part of
-# version control as they are data points which are potentially sensitive and
-# subject to change depending on the environment.
-#
-*.pkrvars.hcl
+# Ansible
+ansible/*.retry
 
-# For built boxes
-*.box
+# Python
+__pycache__/
+.venv/
+
+### AL ###
+#Template for AL projects for Dynamics 365 Business Central
+#launch.json folder
+.vscode/
+#Cache folder
+.alcache/
+#Symbols folder
+.alpackages/
+#Snapshots folder
+.snapshots/
+#Testing Output folder
+.output/
+#Extension App-file
+*.app
+#Rapid Application Development File
+rad.json
+#Translation Base-file
+*.g.xlf
+#License-files
+*.bclicense
+*.flf
+#Test results file
+TestResults.xml
+
+# backup files
+*.bak
+*.backup
+*.backup.*
+*.tmp
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+tfplan
+*.tfplan
+override.tf
+override.tf.json
+
+# SSH Keys — NEVER commit private keys
+keys/
+keys/*
+*.pem
+*_rsa
+*_ed25519
+!*_ed25519.pub
+!*_rsa.pub
+
+# Ansible
+*.retry
+ansible/group_vars/all/vault.yml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Kimchi
+../.kimchi/
+../.kimchi/*
+./.kimchi/*
+/.kimchi/*
+
+
+# Txt files
+.txt
+*.txt
+terraform-ansible-cicd-guide.jsx.txt
+
+# Claud files
+.claud/
+.claud/*
+CLAUDE.md

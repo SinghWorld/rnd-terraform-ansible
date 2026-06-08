@@ -1,0 +1,44 @@
+---
+# ansible/playbooks/windows_setup.yml
+
+- name: Windows EC2 - Basic Setup
+  hosts: windows
+  gather_facts: true
+
+  vars:
+    test_dir:  'C:\TestDirectory'
+    test_file: 'C:\TestDirectory\test.txt'
+
+  tasks:
+
+    - name: PING - Test WinRM connection
+      ansible.windows.win_ping:
+
+    - name: DIR - Create TestDirectory on C drive
+      ansible.windows.win_file:
+        path: '{{ test_dir }}'
+        state: directory
+
+    - name: FILE - Create test.txt
+      ansible.windows.win_copy:
+        dest: '{{ test_file }}'
+        content: |
+          Hello from Ansible!
+          Host      : {{ ansible_hostname }}
+          IP        : {{ ansible_host }}
+          Timestamp : {{ ansible_date_time.iso8601 }}
+          Managed by: Ansible + Terraform
+
+    - name: FILE - Read back test.txt
+      ansible.windows.win_shell: 'Get-Content ''{{ test_file }}'''
+      register: file_content
+
+    - name: FILE - Show content
+      ansible.builtin.debug:
+        msg: '{{ file_content.stdout_lines }}'
+
+    - name: DONE - Summary
+      ansible.builtin.debug:
+        msg:
+          - 'Directory : {{ test_dir }}'
+          - 'File      : {{ test_file }}'
