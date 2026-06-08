@@ -20,6 +20,10 @@ terraform {
       source  = "hashicorp/local"
       version = "~> 2.0"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
+    }
   }
 }
 
@@ -170,6 +174,20 @@ resource "aws_spot_instance_request" "windows_spot" {
   # Give Windows enough time to fully boot + run userdata
   timeouts {
     create = "20m" # Longer timeout for spot - takes more time to fulfill
+  }
+}
+
+###############################################################
+# 6. AUTOMATE INVENTORY UPDATE
+#    After spot instance is created, automatically update
+#    ansible/inventory.ini with the new public IP
+###############################################################
+
+resource "null_resource" "update_inventory" {
+  depends_on = [aws_spot_instance_request.windows_spot]
+
+  provisioner "local-exec" {
+    command = "${path.module}/../scripts/update-inventory.sh ${aws_spot_instance_request.windows_spot.public_ip} ${path.module}/../ansible/inventory.ini"
   }
 }
 
