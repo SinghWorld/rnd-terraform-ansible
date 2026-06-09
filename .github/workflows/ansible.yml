@@ -97,6 +97,7 @@ jobs:
       - name: Verify WinRM after setup
         env:
           PUBLIC_IP: ${{ steps.ip.outputs.public_ip }}
+          TF_VAR_winrm_password: ${{ secrets.TF_VAR_winrm_password }}
         run: |
           echo "Verifying WinRM connectivity to ${PUBLIC_IP}..."
           ansible windows -i ansible/inventory.ini -m win_ping \
