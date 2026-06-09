@@ -51,6 +51,8 @@ jobs:
           TF_VAR_spot_project_name: ${{ secrets.TF_VAR_spot_project_name }}
           TF_VAR_spot_key_name: ${{ secrets.TF_VAR_spot_key_name }}
           TF_VAR_spot_instance_type: ${{ secrets.TF_VAR_spot_instance_type }}
+          TF_VAR_spot_price: ${{ secrets.TF_VAR_spot_price }}
+          TF_VAR_spot_interruption_behavior: ${{ secrets.TF_VAR_spot_interruption_behavior }}
           TF_VAR_winrm_username: ${{ secrets.TF_VAR_winrm_username }}
           TF_VAR_winrm_password: ${{ secrets.TF_VAR_winrm_password }}
         run: |
