@@ -2,41 +2,42 @@
 
 Provision a **Windows EC2 Spot Instance** on AWS using Terraform, then configure it automatically via **Ansible** over WinRM. Zero manual RDP required after deploy.
 
+Supports **local development** and **GitHub Actions CI/CD** via OIDC federation — no long-lived AWS credentials required.
+
 ---
 
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         YOUR LOCAL MACHINE                       │
-│                                                                  │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐  │
-│  │ Terraform    │    │ WinRM        │    │ Ansible          │  │
-│  │ (spot-*.tf)  │───▶│ bootstrap    │───▶│ (windows_setup)  │  │
-│  │              │    │ (PowerShell) │    │                  │  │
-│  └──────┬───────┘    └──────────────┘    └──────────────────┘  │
-│         │                                                       │
-│         │  1. Generate RSA key pair                             │
-│         │  2. Request spot instance                             │
-│         │  3. Inject userdata.ps1 (WinRM setup)                │
-│         │  4. null_resource → update-inventory.sh              │
-│         │  5. Ansible connects via WinRM port 5985             │
-└─────────┼───────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                        LOCAL MACHINE / GITHUB ACTIONS             │
+│                                                                   │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────────────┐ │
+│  │ Terraform    │   │ PowerShell   │   │ Ansible              │ │
+│  │ (spot-*.tf)  │──▶│ userdata     │──▶│ (windows_setup.yml)  │ │
+│  │              │   │ bootstrap    │   │                      │ │
+│  └──────┬───────┘   └──────────────┘   └──────────────────────┘ │
+│         │                                                        │
+│         │  1. Generate RSA 4096-bit key pair                     │
+│         │  2. Request spot instance with userdata.ps1            │
+│         │  3. null_resource → update-inventory.sh               │
+│         │  4. Ansible connects via WinRM port 5985               │
+└─────────┼────────────────────────────────────────────────────────┘
           │
           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      AWS us-east-1                               │
-│                                                                  │
-│  ┌──────────────────────┐    ┌───────────────────────────────┐ │
-│  │ Default VPC          │    │ WinRM Security Group          │ │
-│  │                      │    │   - TCP 5985 (HTTP)           │ │
-│  │  ┌────────────────┐  │    │   - TCP 5986 (HTTPS)          │ │
-│  │  │ Windows 2022   │◀─┼────│   - TCP 3389 (RDP)            │ │
-│  │  │ Spot Instance  │  │    │                               │ │
-│  │  │ t3.medium      │  │    └───────────────────────────────┘ │
-│  │  └────────────────┘  │                                      │
-│  └──────────────────────┘                                      │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                         AWS us-east-1                              │
+│                                                                   │
+│  ┌────────────────────┐   ┌────────────────────────────────────┐ │
+│  │ Default VPC        │   │ WinRM Security Group               │ │
+│  │                    │   │   TCP 5985 (HTTP)                  │ │
+│  │  ┌──────────────┐  │   │   TCP 5986 (HTTPS)                 │ │
+│  │  │ Windows 2022 │◀──┼───│   TCP 3389 (RDP)                  │ │
+│  │  │ Spot Instance│  │   └────────────────────────────────────┘ │
+│  │  │ t3.medium    │  │                                          │
+│  │  └──────────────┘  │                                          │
+│  └────────────────────┘                                          │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ### Component Map
@@ -46,152 +47,162 @@ Provision a **Windows EC2 Spot Instance** on AWS using Terraform, then configure
 | `terraform/spot-instance.tf` | Core Terraform: key pair, SG, spot instance request, auto-inventory |
 | `terraform/spot-variables.tf` | All tunable variables (region, instance type, spot price, etc.) |
 | `terraform/spot-outputs.tf` | Outputs: public IP, connection strings, Ansible one-liner |
-| `terraform/spot-userdata.ps1` | PowerShell bootstrap run on first boot — enables WinRM, creates admin |
-| `scripts/deploy.sh` | Orchestrates password injection + terraform init/apply |
-| `scripts/update-inventory.sh` | Called by Terraform null_resource — writes public IP to `inventory.ini` |
-| `scripts/verify_winrm.sh` | Polls port 5985 until WinRM is ready, prints next steps |
+| `terraform/spot-userdata.ps1` | PowerShell bootstrap — enables WinRM, creates admin account |
+| `terraform/backend.tf` | S3 remote state backend (Object Lock, no DynamoDB) |
+| `terraform/terraform.tfvars` | Non-sensitive defaults committed to repo |
+| `scripts/01_setup_aws_oidc.sh` | Creates IAM OIDC Provider + Role, sets GitHub secrets |
+| `scripts/02_setup_s3_backend.sh` | Creates S3 bucket for remote state, updates `backend.tf` |
+| `scripts/05_destroy_resources.sh` | Tears down all AWS resources |
+| `scripts/update-inventory.sh` | Writes public IP to `inventory.ini` after instance creation |
+| `scripts/verify_winrm.sh` | Polls port 5985 until WinRM is ready |
 | `ansible/inventory.ini` | Dynamic inventory — IP updated automatically by Terraform |
 | `ansible/ansible.cfg` | Ansible configuration (WinRM transport, host key checking off) |
-| `ansible/playbooks/windows_setup.yml` | Example playbook: win_ping, file create, shell echo |
+| `ansible/playbooks/windows_setup.yml` | Example playbook: win_ping, directory create, file write |
+| `.github/workflows/terraform-plan.yml` | CI: runs `terraform plan` on every PR |
+| `.github/workflows/terraform-apply.yml` | CI: runs `terraform apply` on PR merge, triggers Ansible |
+| `.github/workflows/terraform-destroy.yml` | CI: destroys resources on workflow dispatch |
+| `.github/workflows/ansible.yml` | CI: runs Ansible playbook after successful apply |
 
 ---
 
 ## Prerequisites
 
-### Required on Your Local Machine
+### Required on Your Local Machine (Local Development)
 
-| Tool | Version | Install |
+| Package | Version | Install |
 |---|---|---|
-| **Terraform** | ≥ 1.5.0 | [hashicorp.com/terraform](https://developer.hashicorp.com/terraform/install) |
+| **Terraform** | ≥ 1.5.0 (CI uses 1.9.0) | [hashicorp.com/terraform](https://developer.hashicorp.com/terraform/install) |
 | **Ansible** | ≥ 2.9 | `pip install ansible` or [docs.ansible.com](https://docs.ansible.com/ansible/latest/installation_guide/intro_installation.html) |
 | **AWS CLI** | v2 | `brew install awscli` or [aws.amazon.com/cli](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) |
-| **Bash 4+** | ≥ 4.0 | macOS: `brew install bash`; Linux: already present |
-| **netcat** (nc) | any | Pre-installed on most Linux/macOS; for WinRM port polling |
-| **curl** | any | Pre-installed; used for WinRM health check |
-
-### AWS Account Requirements
-
-| Requirement | Detail |
-|---|---|
-| **AWS Account** | Must have permissions to: `ec2:RunInstances`, `ec2:CreateKeyPair`, `ec2:Describe*`, `ec2:DeleteKeyPair`, `ec2:CancelSpotInstanceRequests`, `iam:CreateServiceLinkedRole` (if required) |
-| **Servicequotas** | Ensure you have EC2 spot instance quota for `t3.medium` (or your chosen type) in `us-east-1` |
-| **Default VPC** | Must exist in `us-east-1` with at least one available subnet. The Terraform uses the **default VPC** automatically. |
-| **AWS Region** | Defaults to `us-east-1`. Change `var.aws_region` in `terraform/spot-variables.tf` to use another region. |
+| **Bash** | ≥ 4.0 | macOS: `brew install bash`; Linux: pre-installed |
+| **git** | any | `brew install git` or system package manager |
+| **gh CLI** | ≥ 2.0 | `brew install gh` or [github.com/cli](https://cli.github.com) |
 
 ### Python / Ansible Windows Dependencies
 
-Ansible's `win_*` modules require the `pywinrm` library on the **control node** (your machine):
+Ansible's `win_*` modules require `pywinrm` on the **control node**:
 
 ```bash
 pip install pywinrm
 ```
 
+### GitHub Actions CI/CD (No Local Credentials Required)
+
+| Tool | Purpose |
+|---|---|
+| **GitHub repo** | Source of truth; workflows run on `ubuntu-latest` |
+| **OIDC Provider** | Set up by `scripts/01_setup_aws_oidc.sh` — no long-lived keys |
+| **S3 bucket** | Created by `scripts/02_setup_s3_backend.sh` — remote state |
+| **GitHub Secrets** | `AWS_ROLE_ARN`, `TF_VAR_winrm_password`, `TF_VAR_tf_state_bucket` |
+
+### AWS Account Requirements
+
+| Requirement | Detail |
+|---|---|
+| **AWS Account** | Must have permissions for: `ec2:RunInstances`, `ec2:CreateKeyPair`, `ec2:Describe*`, `ec2:DeleteKeyPair`, `ec2:CancelSpotInstanceRequests`, `iam:CreateOpenIDConnectProvider`, `iam:CreateRole`, `iam:AttachRolePolicy`, `s3:*` |
+| **Service Quotas** | EC2 spot instance quota for `t3.medium` (or your chosen type) in `us-east-1` |
+| **Default VPC** | Must exist in `us-east-1` with at least one available subnet |
+| **AWS Region** | Defaults to `us-east-1`. Override with `TF_VAR_aws_region` |
+
 ---
 
-## Setup Instructions
+## Quick Start
 
-### 1. Clone and Navigate
+### One-Time Setup (GitHub Actions)
 
 ```bash
 git clone https://github.com/SinghWorld/rnd-terraform-ansible.git
 cd rnd-terraform-ansible
+
+# Step 1: Create OIDC provider + IAM role + GitHub secrets
+./scripts/01_setup_aws_oidc.sh
+
+# Step 2: Create S3 backend bucket + GitHub secret
+./scripts/02_setup_s3_backend.sh
 ```
 
-### 2. Authenticate to AWS
+This script will:
+- Create an IAM OIDC Provider linked to `token.actions.githubusercontent.com`
+- Create an IAM Role with `AmazonEC2FullAccess`, `AmazonS3FullAccess`, `AmazonDynamoDBFullAccess`, `IAMFullAccess`
+- Create an S3 bucket with Object Lock (7-day GOVERNANCE retention) and AES-256 encryption
+- Set GitHub Secrets: `AWS_ROLE_ARN`, `TF_VAR_winrm_password`, `TF_VAR_tf_state_bucket`
+- Update `terraform/backend.tf` automatically
+
+### Local Development
 
 ```bash
-# Verify you're logged in
+# Authenticate to AWS
 aws sts get-caller-identity
+aws configure   # if not logged in
 
-# If not logged in:
-aws configure
-# Follow prompts to set AWS Access Key ID, Secret Access Key, default region (us-east-1)
-```
-
-### 3. Install Local Dependencies
-
-**macOS / Linux:**
-
-```bash
-# Terraform
-brew install terraform        # macOS
-# or: sudo apt install terraform   # Ubuntu/Debian
-# or: download from https://developer.hashicorp.com/terraform/downloads
-
-# Ansible + pywinrm
-pip install ansible pywinrm
-
-# Verify
-terraform version
-ansible --version
-```
-
-**Windows (WSL2 recommended):**
-
-```bash
-# In WSL2 Ubuntu:
-curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
-sudo apt update && sudo apt install terraform
-pip install ansible pywinrm
-```
-
-### 4. Deploy the Spot Instance
-
-```bash
-# Set your Windows admin password (must be ≥12 characters)
+# Set your Windows admin password (≥12 characters)
 export TF_VAR_winrm_password="YourStr0ngP@ss!"
 
-# Make scripts executable
-chmod +x scripts/deploy.sh scripts/update-inventory.sh scripts/verify_winrm.sh
+# Install dependencies
+brew install terraform ansible awscli gh
 
-# Run the deploy
+# Make scripts executable
+chmod +x scripts/*.sh
+
+# Deploy
 ./scripts/deploy.sh
 ```
 
-**What `deploy.sh` does:**
-
-1. Reads `TF_VAR_winrm_password` and validates length ≥ 12
-2. Injects the password into `terraform/spot-userdata.ps1` (restores original afterwards — never committed)
-3. Runs `terraform init` and `terraform validate`
-4. Runs `terraform apply -auto-approve`
-5. The `null_resource.update_inventory` provisioner calls `update-inventory.sh` to write the new public IP to `ansible/inventory.ini`
-6. Restores the original `userdata.ps1` (no secrets left on disk)
-
-### 5. Wait for Windows to Boot + WinRM to Start
+### Wait for WinRM
 
 ```bash
 ./scripts/verify_winrm.sh
+# Polls port 5985 every 15 seconds (up to 10 minutes)
+# Windows takes 5–8 minutes from apply to WinRM ready
 ```
 
-This script:
-- Reads the public IP from `terraform output`
-- Polls port 5985 every 15 seconds (up to 10 minutes)
-- Performs an HTTP health check against `http://<IP>:5985/wsman`
-- Prints connection strings and Ansible test commands
-
-> **Windows takes 5–8 minutes** from `terraform apply` to WinRM being fully operational. The `verify_winrm.sh` script handles the wait automatically.
-
-### 6. Run Ansible
+### Run Ansible
 
 ```bash
 cd ansible
 ansible-playbook -i inventory.ini playbooks/windows_setup.yml
 ```
 
-Expected output:
+---
+
+## CI/CD Pipeline
+
+### Workflow Overview
 
 ```
-TASK [ping : PING]
-ok: [3.235.x.x]
-
-TASK [dir : DIR - Create TestDirectory on C drive]
-changed: [3.235.x.x]
-
-TASK [file : FILE - Create test.txt]
-changed: [3.235.x.x]
-...
+PR opened
+  └── terraform-plan.yml     → validates + plans (no changes applied)
+       └── terraform-apply.yml (merged) → terraform apply
+                                          └── ansible.yml → win_ping + setup
 ```
+
+### terraform-plan.yml
+
+- **Trigger:** Every pull request touching `terraform/**`, `scripts/**`, `.github/workflows/terraform-*.yml`
+- **What it does:** `terraform init`, `validate`, `plan`
+- **Artifacts:** `tfplan` file uploaded for review
+- **Security:** Injects `TF_VAR_winrm_password` into `userdata.ps1` only for plan, then restores original file via `git checkout`
+
+### terraform-apply.yml
+
+- **Trigger:** PR merged to main, or manual `workflow_dispatch`
+- **What it does:**
+  1. Injects password into `userdata.ps1` (restores via `git checkout` after apply)
+  2. `terraform init -upgrade`, `validate`, `apply -auto-approve`
+  3. Uploads private key and public IP as artifacts
+  4. Triggers `ansible.yml` via `repository_dispatch` event
+  5. Posts PR comment with public IP on merge
+
+### terraform-destroy.yml
+
+- **Trigger:** Manual `workflow_dispatch`
+- **What it does:** `terraform destroy -auto-approve` for all AWS resources
+
+### ansible.yml
+
+- **Trigger:** `repository_dispatch` event type `ansible-run`
+- **What it does:** Runs `windows_setup.yml` against the deployed Windows instance
+- **Inputs:** `public_ip` passed from `terraform-apply.yml`
 
 ---
 
@@ -199,177 +210,150 @@ changed: [3.235.x.x]
 
 ### Terraform Variables
 
-Override by setting environment variables before `terraform apply`:
+Override by setting `TF_VAR_*` environment variables:
 
 | Variable | Env Var | Default | Description |
 |---|---|---|---|
 | `aws_region` | `TF_VAR_aws_region` | `us-east-1` | AWS region |
-| `spot_project_name` | `TF_VAR_spot_project_name` | `win-spot-demo` | Prefix for all resource names |
-| `spot_key_name` | `TF_VAR_spot_key_name` | `win-spot-key` | EC2 key pair name |
-| `spot_instance_type` | `TF_VAR_spot_instance_type` | `t3.medium` | EC2 instance type (t3.medium minimum for Windows) |
-| `spot_price` | `TF_VAR_spot_price` | `0.05` | Max $/hour bid for spot instance |
-| `spot_interruption_behavior` | `TF_VAR_spot_interruption_behavior` | `stop` | `stop` \| `hibernate` \| `terminate` on interruption |
-| `winrm_password` | `TF_VAR_winrm_password` | *(none — required)* | Windows local admin password |
-
-Example:
-
-```bash
-export TF_VAR_spot_instance_type="t3.large"
-export TF_VAR_spot_price="0.08"
-export TF_VAR_winrm_password="MyStr0ngP@ss!"
-./scripts/deploy.sh
-```
+| `spot_project_name` | `TF_VAR_spot_project_name` | `win-demo` | Prefix for all resource names |
+| `spot_key_name` | `TF_VAR_spot_key_name` | `win-demo-key` | EC2 Key Pair name |
+| `spot_instance_type` | `TF_VAR_spot_instance_type` | `t3.medium` | EC2 instance type |
+| `spot_price` | `TF_VAR_spot_price` | `0.05` | Max $/hour bid for spot |
+| `spot_interruption_behavior` | `TF_VAR_spot_interruption_behavior` | `stop` | `stop` \| `hibernate` \| `terminate` |
+| `winrm_username` | `TF_VAR_winrm_username` | `ansible_admin` | Windows admin user |
+| `winrm_password` | `TF_VAR_winrm_password` | *(required)* | Windows admin password |
 
 ### Spot Price Guidance
 
-| Instance Type | Approximate On-Demand/hr | Suggested Spot Ceiling | Notes |
-|---|---|---|---|
-| `t3.medium` | ~$0.05 | `$0.05–0.06` | Minimum for Windows |
-| `t3.large` | ~$0.08 | `$0.08–0.10` | Better for active workloads |
-| `t3.xlarge` | ~$0.15 | `$0.15–0.18` | Headroom for price spikes |
+| Instance Type | Approx. On-Demand/hr | Suggested Spot Ceiling |
+|---|---|---|
+| `t3.medium` | ~$0.05 | $0.05–0.06 |
+| `t3.large` | ~$0.08 | $0.08–0.10 |
+| `t3.xlarge` | ~$0.15 | $0.15–0.18 |
 
-Set `spot_price` to the on-demand price as a safe starting point. The instance will not be fulfilled if the current spot price exceeds your ceiling.
+Set `spot_price` to the on-demand price as a safe starting point.
 
 ---
 
-## How It Works — Technical Deep Dive
+## Technical Deep Dive
 
 ### Phase 1: Terraform Apply
 
 ```
-1. tls_private_key.ec2_key
-   → Generates a 4096-bit RSA key pair locally
-   → Public key is sent to AWS to create an EC2 Key Pair
-   → Private key is written to scripts/<key_name>.pem (0600 permissions)
+tls_private_key.ec2_key
+  → Generates 4096-bit RSA key pair locally
+  → Public key sent to AWS to create EC2 Key Pair
+  → Private key written to scripts/<key_name>.pem (0600 permissions)
 
-2. aws_key_pair.ec2_key
-   → Registers the public key with AWS under key_name
-   → Allows SSH/RDP password decryption using the private .pem file
+aws_key_pair.ec2_key
+  → Registers public key with AWS
 
-3. data "aws_ami" "windows"
-   → Queries AWS for the most recent Windows_Server-2022-English-Full-Base AMI
-   → Owned by amazon, hvm virtualization, x86_64 architecture
+data "aws_ami" "windows"
+  → Queries latest Windows_Server-2022-English-Full-Base AMI
+  → Owned by amazon, hvm virtualization, x86_64
 
-4. data "aws_vpc" "default" + data "aws_subnets" "default"
-   → Auto-discovers your default VPC and its subnets
-   → Picks the first subnet for instance placement
+data "aws_vpc" "default" + data "aws_subnets" "default"
+  → Auto-discovers default VPC and first available subnet
 
-5. aws_security_group.windows_spot
-   → Creates a security group in the default VPC
-   → Inbound: TCP 5985 (WinRM HTTP), 5986 (WinRM HTTPS), 3389 (RDP)
-   → Outbound: all traffic allowed
+aws_security_group.windows_spot
+  → Inbound: TCP 5985 (WinRM HTTP), 5986 (WinRM HTTPS), 3389 (RDP)
+  → Outbound: all traffic
 
-6. aws_spot_instance_request.windows_spot
-   → Requests a spot instance (not on-demand)
-   → user_data = the spot-userdata.ps1 script (base64-encoded by AWS)
-   → wait_for_fulfillment = true  → terraform blocks until instance is active
-   → Spot price ceiling from var.spot_price; if market price > ceiling, request waits
+aws_spot_instance_request.windows_spot
+  → Requests spot instance (not on-demand)
+  → user_data = base64-encoded spot-userdata.ps1
+  → wait_for_fulfillment = true  → blocks until instance is active
 
-7. local_sensitive_file.private_key
-   → Writes the RSA private key PEM to scripts/<key_name>.pem
-   → file_permission = "0600" — owner read/write only
+local_sensitive_file.private_key
+  → Writes RSA private key PEM to scripts/<key_name>.pem
 
-8. null_resource.update_inventory (provisioner)
-   → Runs AFTER spot instance is fulfilled (depends_on)
-   → Calls ../scripts/update-inventory.sh <public_ip> ../ansible/inventory.ini
-   → Uses awk to replace the IP under [windows] section
+null_resource.update_inventory (provisioner)
+  → Runs AFTER spot instance is fulfilled (depends_on)
+  → Calls scripts/update-inventory.sh to write IP to ansible/inventory.ini
 ```
 
 ### Phase 2: Windows Bootstrap (userdata.ps1)
 
-Executed by EC2 instance on first boot, running as **SYSTEM**:
+Executed by EC2 as **SYSTEM** on first boot:
 
 ```powershell
-# Steps (see terraform/spot-userdata.ps1 for full script):
+# Step 1: Set-ExecutionPolicy Unrestricted
+Set-ExecutionPolicy Unrestricted -Scope LocalMachine -Force
 
-1. Set-ExecutionPolicy Unrestricted -Scope LocalMachine -Force
-   → Allows local PowerShell scripts to run (required for Enable-PSRemoting)
+# Step 2: Create local admin for Ansible
+New-LocalUser "ansible_admin" (password from TF_VAR_winrm_password)
+Add-LocalGroupMember "Administrators" → ansible_admin
 
-2. New-LocalUser "ansible_admin"  +  Add-LocalGroupMember "Administrators"
-   → Creates the account Ansible authenticates as
-   → Password set from TF_VAR_winrm_password (injected before apply)
+# Step 3: Ensure WinRM service is running
+Set-Service WinRM -StartupType Automatic
+Start-Service WinRM
 
-3. Set-Service WinRM -StartupType Automatic + Start-Service WinRM
-   → Ensures the WinRM Windows service is running
+# Step 4: Enable-PSRemoting
+Enable-PSRemoting -Force -SkipNetworkProfileCheck
 
-4. Enable-PSRemoting -Force -SkipNetworkProfileCheck
-   → Registers WinRM endpoints and creates HTTP listener on 0.0.0.0:5985
+# Step 5: Configure WinRM
+winrm set winrm/config/service '@{AllowUnencrypted="true"}'
+winrm set winrm/config/service/auth '@{Basic="true"}'
+winrm set winrm/config/winrs '@{MaxMemoryPerShellMB="1024"}'
+winrm set winrm/config '@{MaxTimeoutms="1800000"}'
 
-5. winrm set winrm/config/service '@{AllowUnencrypted="true"}'
-   winrm set winrm/config/service/auth '@{Basic="true"}'
-   → Enables unencrypted Basic auth over HTTP (required for Ansible pywinrm basic auth)
+# Step 6: Create HTTP listener on all interfaces
+winrm create winrm/config/listener?Address=*+Transport=HTTP
 
-6. winrm create winrm/config/listener?Address=*+Transport=HTTP
-   → Explicitly creates the HTTP listener on all interfaces if not already present
+# Step 7: Firewall rules + disable Windows Firewall
+netsh advfirewall firewall add rule → TCP 5985, 5986 allow
+netsh advfirewall set allprofiles state off
 
-7. netsh advfirewall firewall add rule ... (TCP 5985, 5986) + set allprofiles state off
-   → Opens firewall ports AND disables Windows Firewall completely
-   → Note: restrict 0.0.0.0/0 ingress in production via AWS SG
+# Step 8: Restart WinRM
+Restart-Service WinRM -Force
 
-8. Restart-Service WinRM -Force
-   → Applies all configuration changes
-
-9. netstat -an | Select-String "0.0.0.0:5985"
-   → Confirms port 5985 is listening
+# Step 9: Confirm port 5985 is listening
+netstat -an | Select-String "0.0.0.0:5985"
 ```
 
-
-### Wait then verify (critical — Windows needs 5–8 min)
-```sh
-cd ..
-chmod +x scripts/verify_winrm.sh
-./scripts/verify_winrm.sh
-# This polls port 5985 and tells you when it's ready
-```
-
-### Get the IP
-```sh
-cd terraform && terraform output -raw public_ip
-# e.g. 54.123.45.67
-
-# Edit ansible/inventory.ini — replace WINDOWS_PUBLIC_IP and REPLACE_WITH_YOUR_PASSWORD
-```
+Log file: `C:\winrm_setup.log` on the instance.
 
 ### Phase 3: Ansible Configuration
 
-The `ansible.cfg`:
-
+`ansible.cfg`:
 ```ini
 [defaults]
 inventory           = inventory.ini
-host_key_checking   = False   # WinRM has no host keys
+host_key_checking   = False
 retry_files_enabled = False
-stdout_callback     = yaml    # Human-readable output
+stdout_callback     = yaml
 timeout             = 60
 ```
 
-The `inventory.ini` (auto-updated by Terraform):
-
+`inventory.ini` (auto-updated by Terraform):
 ```ini
 [windows]
-<PUBLIC_IP>    # ← replaced by update-inventory.sh
+TARGET_IP
 
 [windows:vars]
 ansible_user=ansible_admin
-ansible_password=<TF_VAR_winrm_password>
-ansible_connection=winrm           # Use WinRM, not SSH
-ansible_winrm_transport=basic      # Username/password auth
+ansible_connection=winrm
+ansible_winrm_transport=basic
 ansible_winrm_port=5985
-ansible_winrm_scheme=http          # Unencrypted HTTP
-ansible_winrm_server_cert_validation=ignore  # No TLS cert needed
+ansible_winrm_scheme=http
+ansible_winrm_server_cert_validation=ignore
 ansible_winrm_operation_timeout_sec=120
 ansible_winrm_read_timeout_sec=150
 ```
 
-### Phase 4: Spot Interruption Handling
+### Phase 4: S3 Backend with Object Lock
 
-| Behavior | What Happens |
-|---|---|
-| `stop` (default) | Instance is stopped. When restarted, userdata does **not** re-run. Data on instance store is lost. EBS volume persists. |
-| `hibernate` | Instance is hibernated. Requires Hibernate to be enabled on the instance (not enabled by default). |
-| `terminate` | Instance is terminated. All data lost. Terraform will need to re-apply. |
+- **Bucket:** Created by `02_setup_s3_backend.sh` with Object Lock (GOVERNANCE, 7 days)
+- **No DynamoDB:** Uses S3 native `use_lockfile = true` instead of DynamoDB locking
+- **Encryption:** AES-256 via `put-bucket-encryption`
+- **Public access:** Blocked via `put-public-access-block`
 
-**Recommendation:** For dev/test workloads, use `stop`. For production, use `hibernate` if supported, or implement a termination notice handler using SQS + CloudWatch Events to gracefully drain workloads before interruption.
+### Phase 5: OIDC Authentication
+
+- **Provider URL:** `https://token.actions.githubusercontent.com`
+- **Thumbprint:** `6938fd4d98bab03faadb97b34396831e3780aea1`
+- **Condition:** `sub: repo:SinghWorld/rnd-terraform-ansible:*` — only this repo can assume the role
+- **No long-lived keys:** AWS credentials are short-lived, obtained via `aws-actions/configure-aws-credentials@v4`
 
 ---
 
@@ -377,69 +361,68 @@ ansible_winrm_read_timeout_sec=150
 
 ```
 .
-├── README.md                     # This file
+├── README.md
 ├── .gitignore
 │
+├── .github/
+│   └── workflows/
+│       ├── terraform-plan.yml      # PR: init → validate → plan
+│       ├── terraform-apply.yml     # Merge/dispatch: apply → trigger Ansible
+│       ├── terraform-destroy.yml   # Dispatch: destroy all resources
+│       └── ansible.yml             # Dispatch: run windows_setup.yml
+│
 ├── terraform/
-│   ├── spot-instance.tf          # Core resources (keypair, SG, spot instance, null_resource)
-│   ├── spot-variables.tf         # All variables + defaults
-│   ├── spot-outputs.tf           # All outputs (IPs, connection strings)
-│   └── spot-userdata.ps1         # PowerShell bootstrap (WinRM setup)
+│   ├── spot-instance.tf            # Key pair, SG, spot instance, null_resource
+│   ├── spot-variables.tf           # All variables
+│   ├── spot-outputs.tf             # All outputs
+│   ├── spot-userdata.ps1           # PowerShell bootstrap (WinRM setup)
+│   ├── backend.tf                  # S3 remote state (auto-updated)
+│   └── terraform.tfvars            # Non-sensitive defaults
 │
 ├── scripts/
-│   ├── deploy.sh                 # Full deploy pipeline (password injection + terraform apply)
-│   ├── update-inventory.sh       # Updates ansible/inventory.ini with new public IP
-│   ├── verify_winrm.sh           # Polls WinRM port until ready
-│   └── win-spot-key.pem          # Private key (gitignored, generated on terraform apply)
+│   ├── 01_setup_aws_oidc.sh        # OIDC provider + IAM role + GitHub secrets
+│   ├── 02_setup_s3_backend.sh      # S3 bucket + backend.tf update
+│   ├── 05_destroy_resources.sh     # Destroy all AWS resources
+│   ├── update-inventory.sh         # Write IP to inventory.ini (called by Terraform)
+│   └── verify_winrm.sh             # Poll port 5985 until WinRM ready
 │
 └── ansible/
-    ├── ansible.cfg               # Ansible defaults (WinRM transport, YAML output)
-    ├── inventory.ini             # Dynamic inventory (auto-updated by Terraform)
+    ├── ansible.cfg                 # WinRM transport, YAML output
+    ├── inventory.ini               # Dynamic inventory (auto-updated)
     └── playbooks/
-        └── windows_setup.yml     # Example playbook (win_ping, file, shell)
+        └── windows_setup.yml       # win_ping, directory, file write
 ```
 
 ---
 
 ## Troubleshooting
 
-### `terraform apply` fails with "Instance limit exceeded"
+### Terraform fails with "Instance limit exceeded"
 
-Your AWS account has a limit on running `t3.medium` instances in `us-east-1`. Request a limit increase via AWS Console → Support → Service Quotas, or switch to a smaller type (`t3.small`) temporarily.
+Request a limit increase via AWS Console → Support → Service Quotas, or switch to a smaller type (`t3.small`) temporarily.
 
 ### Spot request fulfilled but WinRM never comes up
 
-1. **Wait longer** — Windows takes 5–8 minutes to fully boot and run userdata.
-2. **Check the setup log:** RDP into the instance and run `Get-Content C:\winrm_setup.log`.
-3. **Check AWS Console:** Go to EC2 → Spot Requests → check the status history.
-4. **Try RDP first** (port 3389) to verify the instance itself is reachable.
-5. **Verify Security Group** — ensure inbound TCP 5985 is allowed from your IP (currently `0.0.0.0/0` — restrict in production).
+1. **Wait longer** — Windows takes 5–8 minutes to fully boot
+2. **Check the setup log:** RDP in and run `Get-Content C:\winrm_setup.log`
+3. **Check AWS Console:** EC2 → Spot Requests → status history
+4. **Verify Security Group:** inbound TCP 5985 allowed from your IP
 
-### `ansible-playbook` fails with `ntlm` or `certificate` error
+### `ansible-playbook` fails with NTLM or certificate error
 
-Ensure `ansible_winrm_transport=basic` and `ansible_winrm_server_cert_validation=ignore` are set in `inventory.ini`. The current config has these; do not remove them.
-
-### `win_update` module fails or times out
-
-WinRM has a default shell memory limit of 150MB. The `winrm set winrm/config/winrs '@{MaxMemoryPerShellMB="1024"}'` in userdata.ps1 raises this to 1GB. If you still hit memory limits, adjust `MaxMemoryPerShellMB` higher.
-
-### Private key (.pem) not found after deploy
-
-The private key is written to `scripts/<key_name>.pem` by the `local_sensitive_file` Terraform resource. If you need it for RDP password decryption:
-
-```bash
-# Get the private key path from terraform output
-cd terraform && terraform output private_key_path
-
-# Make sure it's readable
-chmod 600 scripts/win-spot-key.pem
-
-# Use it to decrypt the Windows admin password (from AWS console)
-```
+Ensure `ansible_winrm_transport=basic` and `ansible_winrm_server_cert_validation=ignore` are set in `inventory.ini`. The current config has these — do not remove them.
 
 ### `update-inventory.sh` fails
 
-The script depends on `awk`. Ensure `gawk` or `awk` is installed (standard on Linux/macOS). Also verify `inventory.ini` exists at the expected path relative to the script.
+The script depends on `awk`. Ensure `gawk` or `awk` is installed (standard on Linux/macOS).
+
+### Private key not found after deploy
+
+```bash
+cd terraform && terraform output -raw private_key_path
+chmod 600 scripts/win-spot-key.pem
+# Use it to decrypt Windows admin password from AWS console
+```
 
 ---
 
@@ -447,26 +430,34 @@ The script depends on `awk`. Ensure `gawk` or `awk` is installed (standard on Li
 
 | Concern | Current State | Production Recommendation |
 |---|---|---|
-| **WinRM port 5985** | Open to `0.0.0.0/0` | Restrict to your IP range via `var.winrm_cidr_blocks` in `spot-instance.tf` |
+| **WinRM port 5985** | Open to `0.0.0.0/0` | Restrict to your IP range in `spot-instance.tf` |
 | **RDP port 3389** | Open to `0.0.0.0/0` | Restrict to your IP only |
 | **Basic auth over HTTP** | Enabled (required for Ansible) | Use HTTPS + certificate validation in production |
 | **Windows Firewall** | Disabled in userdata.ps1 | Keep firewall on, only open required ports |
 | **Private key on disk** | Written to `scripts/*.pem` | Store in AWS Secrets Manager instead |
-| **Password in env var** | `TF_VAR_winrm_password` | Use AWS Secrets Manager or Vault to inject at runtime |
-| **Terraform state** | Local `terraform.tfstate` | Use S3 backend with DynamoDB locking |
+| **Password in env var** | `TF_VAR_winrm_password` | Use AWS Secrets Manager or Vault |
+| **Terraform state** | S3 with Object Lock | Already remote; add versioning + access logging |
+| **OIDC Role** | `AmazonEC2FullAccess` (wide) | Replace with least-privilege IAM policy |
 
 ---
 
 ## Cleanup
 
-To destroy all resources created by Terraform:
+### Local
 
 ```bash
 cd terraform
 terraform destroy -auto-approve
 ```
 
-This will cancel the spot request and terminate the instance. The key pair and security group will also be deleted. The `inventory.ini` will retain the last known IP — update it manually or re-run `deploy.sh` for a fresh instance.
+### GitHub Actions (all resources)
+
+```bash
+# Via workflow dispatch in the GitHub UI:
+# Actions → terraform-destroy → Run workflow
+```
+
+The `05_destroy_resources.sh` script also provides a local destroy option.
 
 ---
 
