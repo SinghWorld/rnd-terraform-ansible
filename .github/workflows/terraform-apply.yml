@@ -26,6 +26,8 @@ jobs:
     permissions:
       id-token: write
       contents: write
+      issues: write
+      pull-requests: write
 
     steps:
       - name: Checkout
@@ -125,9 +127,13 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: '✅ Terraform apply completed. Public IP: `${{ steps.outputs.outputs.public_ip }}`'
-            })
+            try {
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: '✅ Terraform apply completed. Public IP: `${{ steps.outputs.outputs.public_ip }}`'
+              })
+            } catch (e) {
+              core.warning('Could not post PR comment: ' + e.message)
+            }
