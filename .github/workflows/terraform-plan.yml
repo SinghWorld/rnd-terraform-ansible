@@ -47,6 +47,7 @@ jobs:
       - name: Terraform Plan
         working-directory: terraform
         env:
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
           TF_VAR_winrm_password: ${{ secrets.TF_VAR_winrm_password }}
         run: |
           # Inject password into userdata for plan
