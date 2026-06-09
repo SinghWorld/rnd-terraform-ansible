@@ -47,7 +47,7 @@ jobs:
       - name: Terraform Plan
         working-directory: terraform
         env:
-          TF_VAR_winrm_password: ${{ secrets.TF_VAR_winrm_password }}
+          TF_VAR_winrm_password: ${{ secrets.TF_VAR_WINRM_PASSWORD }}
         run: |
           # Inject password into userdata for plan
           sed "s|REPLACE_WITH_YOUR_PASSWORD|${TF_VAR_winrm_password}|g" \

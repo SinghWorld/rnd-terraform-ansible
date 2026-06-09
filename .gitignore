@@ -7,7 +7,7 @@ terraform/tfplan
 terraform/crash.log
 
 # Secrets — never commit these
-terraform/terraform.tfvars
+# terraform/terraform.tfvars  # committed to repo with non-sensitive defaults
 terraform/userdata_rendered.ps1
 terraform/userdata.ps1.bak
 scripts/*.pem
