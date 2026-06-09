@@ -118,11 +118,26 @@ if [ -z "$BUCKET_EXISTS" ] || echo "$BUCKET_EXISTS" | grep -qv "Not Found"; then
     --object-lock-configuration '{"ObjectLockEnabled": "Disabled"}' 2>/dev/null \
     || echo "   (Object Lock may already be disabled or not supported)"
 
-  # Empty the bucket — recursive rm handles all versions and delete markers
-  echo "   Emptying bucket (all versions and delete markers)..."
-  aws s3 rm s3://"$BUCKET_NAME" --recursive --region "$AWS_REGION" 2>/dev/null \
-    && echo "   Bucket emptied successfully." \
-    || echo "   (Bucket already empty or objects protected — will attempt bucket delete anyway)"
+  # Empty the bucket — delete all object versions
+  echo "   Emptying bucket (all object versions)..."
+  aws s3api list-object-versions \
+    --bucket "$BUCKET_NAME" \
+    --query "Objects[*].{Key:Key,VersionId:VersionId}" \
+    --output json 2>/dev/null | \
+    jq -r '.[] | "--object Key=\(.Key)" + (if .VersionId then " --version-id \\\(.VersionId)" else "" end)' 2>/dev/null | \
+    while read -r line; do
+      eval "aws s3api delete-object --bucket \"$BUCKET_NAME\" $line" 2>/dev/null || true
+    done
+
+  # Delete delete markers
+  aws s3api list-object-versions \
+    --bucket "$BUCKET_NAME" \
+    --query "DeleteMarkers[*].{Key:Key,VersionId:VersionId}" \
+    --output json 2>/dev/null | \
+    jq -r '.[] | "--object Key=\(.Key)" + (if .VersionId then " --version-id \\\(.VersionId)" else "" end)' 2>/dev/null | \
+    while read -r line; do
+      eval "aws s3api delete-object --bucket \"$BUCKET_NAME\" $line" 2>/dev/null || true
+    done
 
   # Delete the bucket
   echo "   Deleting S3 Bucket..."
