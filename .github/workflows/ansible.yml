@@ -71,7 +71,8 @@ jobs:
             fi
             sleep 30
           done
-          echo "WinRM not ready yet, proceeding anyway..."
+          echo "ERROR: WinRM is not responding on ${PUBLIC_IP}:5985 after 10 attempts. Cannot continue."
+          exit 1
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -81,6 +82,15 @@ jobs:
       - name: Install Ansible
         run: |
           pip install ansible pywinrm
+
+      - name: Verify WinRM before playbook
+        env:
+          PUBLIC_IP: ${{ steps.ip.outputs.public_ip }}
+          TF_VAR_winrm_password: ${{ secrets.TF_VAR_winrm_password }}
+        run: |
+          echo "Verifying WinRM connectivity to ${PUBLIC_IP}..."
+          ansible windows -i ansible/inventory.ini -m win_ping \
+            -e "ansible_password=${TF_VAR_winrm_password}"
 
       - name: Run Ansible Playbook
         env:
@@ -93,13 +103,3 @@ jobs:
             playbooks/windows_setup.yml \
             -e "ansible_password=${TF_VAR_winrm_password}" \
             --extra-vars "target_host=${PUBLIC_IP}"
-
-      - name: Verify WinRM after setup
-        env:
-          PUBLIC_IP: ${{ steps.ip.outputs.public_ip }}
-          TF_VAR_winrm_password: ${{ secrets.TF_VAR_winrm_password }}
-        run: |
-          echo "Verifying WinRM connectivity to ${PUBLIC_IP}..."
-          ansible windows -i ansible/inventory.ini -m win_ping \
-            -e "ansible_password=${TF_VAR_winrm_password}" \
-            || echo "WinRM ping failed, but playbook may have completed"
