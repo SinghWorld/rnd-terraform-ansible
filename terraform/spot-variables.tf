@@ -24,7 +24,7 @@ variable "spot_key_name" {
 variable "spot_instance_type" {
   description = "EC2 instance type — t3.medium minimum for Windows"
   type        = string
-  default     = "t3.medium"
+  # default     = "t3.medium"
 }
 
 variable "spot_price" {
