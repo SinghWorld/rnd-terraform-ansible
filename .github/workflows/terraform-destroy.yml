@@ -66,27 +66,6 @@ jobs:
       - name: Restore original userdata
         run: git checkout terraform/spot-userdata.ps1
 
-      - name: Delete S3 bucket contents
-        env:
-          BUCKET_NAME: ${{ secrets.TF_VAR_tf_state_bucket }}
-        run: |
-          if [ -n "$BUCKET_NAME" ]; then
-            echo "Clearing S3 bucket: $BUCKET_NAME"
-            aws s3 rm s3://$BUCKET_NAME --recursive || true
-            aws s3api delete-object-lock-configuration --bucket $BUCKET_NAME 2>/dev/null || true
-            aws s3api delete-bucket --bucket $BUCKET_NAME || true
-            echo "S3 bucket deleted"
-          fi
-
-      - name: Delete OIDC Provider (optional cleanup)
-        run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          aws iam delete-open-id-connect-provider \
-            --open-id-connect-provider-arn "arn:aws:iam::${ACCOUNT_ID}:oidc-provider/token.actions.githubusercontent.com" \
-            2>/dev/null || true
-          aws iam delete-role --role-name github-actions-oidc-role 2>/dev/null || true
-          echo "IAM cleanup complete"
-
       - name: Comment on PR if applicable
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
