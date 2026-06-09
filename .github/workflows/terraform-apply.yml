@@ -1,9 +1,8 @@
 name: Terraform Apply
 
 on:
-  push:
-    branches:
-      - main
+  pull_request:
+    types: [closed]
     paths:
       - 'terraform/**'
       - 'scripts/**'
@@ -23,6 +22,7 @@ jobs:
   terraform-apply:
     name: Terraform Apply
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     permissions:
       id-token: write
       contents: write
