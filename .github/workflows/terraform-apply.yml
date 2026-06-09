@@ -52,7 +52,7 @@ jobs:
 
       - name: Inject password into userdata
         env:
-          TF_VAR_winrm_password: ${{ secrets.TF_VAR_winrm_password }}
+          TF_VAR_winrm_password: ${{ secrets.TF_VAR_WINRM_PASSWORD }}
         run: |
           sed "s|REPLACE_WITH_YOUR_PASSWORD|${TF_VAR_winrm_password}|g" \
             terraform/spot-userdata.ps1 > terraform/spot-userdata.ps1.tmp
@@ -61,7 +61,7 @@ jobs:
       - name: Terraform Apply
         working-directory: terraform
         env:
-          TF_VAR_winrm_password: ${{ secrets.TF_VAR_winrm_password }}
+          TF_VAR_winrm_password: ${{ secrets.TF_VAR_WINRM_PASSWORD }}
         run: terraform apply -auto-approve -no-color
 
       - name: Restore original userdata
